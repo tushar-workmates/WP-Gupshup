@@ -328,7 +328,6 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // ---------- MESSAGE CHECK ----------
     if (!value.messages || !Array.isArray(value.messages)) {
       return res.sendStatus(200);
     }
@@ -336,29 +335,42 @@ app.post("/webhook", async (req, res) => {
     const msg = value.messages[0];
     const userPhone = msg.from;
 
-    // 🔑 ACK ONCE — SAME PLACE AS WORKING CODE
+    // ---------- DECIDE MESSAGE TYPE FIRST ----------
+    const isText = msg.type === "text";
+    const isAudio = msg.type === "audio";
+
+    // ---------- ACK ONCE (SAFE POSITION) ----------
     res.sendStatus(200);
 
-    let payload = null;
-
-    // ================== TEXT (UNCHANGED LOGIC) ==================
-    if (msg.type === "text") {
+    // ================== TEXT ==================
+    if (isText) {
       const userMessage = msg.text?.body?.trim();
       if (!userMessage) return;
 
+      console.log("💬 Text:", userMessage);
+
       const existingSessionId = sessionStore.get(userPhone);
 
-      payload = existingSessionId
+      const payload = existingSessionId
         ? { message: userMessage, session_id: existingSessionId }
         : { message: userMessage };
+
+      const chatbotResponse = await axios.post(
+        CHATBOT_API_URL,
+        payload,
+        { headers: { "Content-Type": "application/json" }, timeout: 20000 }
+      );
+
+      await finalizeReply(userPhone, chatbotResponse.data, existingSessionId);
     }
 
-    // ================== AUDIO (NEW, SAFE) ==================
-    else if (msg.type === "audio") {
+    // ================== AUDIO ==================
+    else if (isAudio) {
+      console.log("🎤 Voice received");
+
       const mediaId = msg.audio?.id;
       if (!mediaId) return;
 
-      // Get media URL
       const mediaMeta = await axios.get(
         `https://api.gupshup.io/sm/api/v1/media/${mediaId}`,
         { headers: { apikey: GUPSHUP_API_KEY } }
@@ -367,7 +379,6 @@ app.post("/webhook", async (req, res) => {
       const audioUrl = mediaMeta.data.url;
       const audioPath = `./temp_${mediaId}.ogg`;
 
-      // Download audio
       const audioStream = await axios.get(audioUrl, { responseType: "stream" });
       const writer = fs.createWriteStream(audioPath);
       audioStream.data.pipe(writer);
@@ -387,11 +398,9 @@ app.post("/webhook", async (req, res) => {
         { headers: form.getHeaders(), timeout: 20000 }
       );
 
-      const data = chatbotResponse.data || {};
-      await finalizeReply(userPhone, data, existingSessionId);
+      await finalizeReply(userPhone, chatbotResponse.data, existingSessionId);
 
       fs.unlink(audioPath, () => {});
-      return;
     }
 
     // ================== UNSUPPORTED ==================
@@ -400,20 +409,7 @@ app.post("/webhook", async (req, res) => {
         userPhone,
         "Please send text or voice messages 🙂"
       );
-      return;
     }
-
-    // ================== CHATBOT CALL (TEXT PATH) ==================
-    const chatbotResponse = await axios.post(
-      CHATBOT_API_URL,
-      payload,
-      { headers: { "Content-Type": "application/json" }, timeout: 20000 }
-    );
-
-    const data = chatbotResponse.data || {};
-    const existingSessionId = sessionStore.get(userPhone);
-
-    await finalizeReply(userPhone, data, existingSessionId);
 
   } catch (err) {
     console.error("❌ ERROR:", err.response?.data || err.message);
@@ -422,14 +418,14 @@ app.post("/webhook", async (req, res) => {
 
 // ================== FINALIZE REPLY ==================
 async function finalizeReply(userPhone, data, existingSessionId) {
-  let reply =
-    data.answer ||
-    data.message ||
-    data.reply ||
-    data.text ||
+  const reply =
+    data?.answer ||
+    data?.message ||
+    data?.reply ||
+    data?.text ||
     "Sorry, I couldn't understand that.";
 
-  if (!existingSessionId && data.session_id) {
+  if (!existingSessionId && data?.session_id) {
     sessionStore.set(userPhone, data.session_id);
   }
 
@@ -460,5 +456,5 @@ async function sendWhatsAppMessage(destination, text) {
 
 // ================== START SERVER ==================
 app.listen(4000, () => {
-  console.log("🚀 Gupshup WhatsApp Bot running on port 4000");
+  console.log("🚀 Gupshup WhatsApp Bot running on port 4000----->>>>>");
 });
