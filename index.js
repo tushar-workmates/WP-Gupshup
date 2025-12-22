@@ -303,10 +303,13 @@ import express from "express";
 import axios from "axios";
 import "dotenv/config";
 import fs from "fs";
-import FormData from "form-data";
+
+console.log("🔥 Server starting...");
 
 const app = express();
-app.use(express.json());
+
+// 🔑 IMPORTANT: safe body parser for hosted servers
+app.use(express.json({ limit: "25mb" }));
 
 // ================== CONFIG ==================
 const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
@@ -318,6 +321,8 @@ const sessionStore = new Map(); // phone -> session_id
 
 // ================== WEBHOOK ==================
 app.post("/webhook", async (req, res) => {
+  console.log("🔥 WEBHOOK HIT");
+
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     if (!value) return res.sendStatus(200);
@@ -328,6 +333,7 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // ---------- MESSAGE CHECK ----------
     if (!value.messages || !Array.isArray(value.messages)) {
       return res.sendStatus(200);
     }
@@ -335,19 +341,15 @@ app.post("/webhook", async (req, res) => {
     const msg = value.messages[0];
     const userPhone = msg.from;
 
-    // ---------- DECIDE MESSAGE TYPE FIRST ----------
-    const isText = msg.type === "text";
-    const isAudio = msg.type === "audio";
-
-    // ---------- ACK ONCE (SAFE POSITION) ----------
-    res.sendStatus(200);
-
-    // ================== TEXT ==================
-    if (isText) {
+    // ================== TEXT (UNCHANGED FLOW) ==================
+    if (msg.type === "text") {
       const userMessage = msg.text?.body?.trim();
-      if (!userMessage) return;
+      if (!userMessage) return res.sendStatus(200);
 
       console.log("💬 Text:", userMessage);
+
+      // ✅ ACK EARLY (same as your working code)
+      res.sendStatus(200);
 
       const existingSessionId = sessionStore.get(userPhone);
 
@@ -361,76 +363,86 @@ app.post("/webhook", async (req, res) => {
         { headers: { "Content-Type": "application/json" }, timeout: 20000 }
       );
 
-      await finalizeReply(userPhone, chatbotResponse.data, existingSessionId);
+      const data = chatbotResponse.data || {};
+
+      const reply =
+        data.answer ||
+        data.message ||
+        data.reply ||
+        data.text ||
+        "Sorry, I couldn't understand that.";
+
+      if (!existingSessionId && data.session_id) {
+        sessionStore.set(userPhone, data.session_id);
+      }
+
+      await sendWhatsAppMessage(userPhone, reply);
+      return;
     }
 
-    // ================== AUDIO ==================
-    else if (isAudio) {
-      console.log("🎤 Voice received");
+    // ================== AUDIO (SAFE METHOD) ==================
+    if (msg.type === "audio") {
+      console.log("🎤 Audio message received");
+
+      // ✅ ACK EARLY (same rule)
+      res.sendStatus(200);
 
       const mediaId = msg.audio?.id;
       if (!mediaId) return;
 
+      // 1️⃣ Get media URL from Gupshup
       const mediaMeta = await axios.get(
         `https://api.gupshup.io/sm/api/v1/media/${mediaId}`,
         { headers: { apikey: GUPSHUP_API_KEY } }
       );
 
       const audioUrl = mediaMeta.data.url;
-      const audioPath = `./temp_${mediaId}.ogg`;
-
-      const audioStream = await axios.get(audioUrl, { responseType: "stream" });
-      const writer = fs.createWriteStream(audioPath);
-      audioStream.data.pipe(writer);
-      await new Promise(resolve => writer.on("finish", resolve));
+      console.log("🔗 Audio URL:", audioUrl);
 
       const existingSessionId = sessionStore.get(userPhone);
 
-      const form = new FormData();
-      form.append("audio", fs.createReadStream(audioPath));
-      if (existingSessionId) {
-        form.append("session_id", existingSessionId);
-      }
+      // 2️⃣ Send audio URL to chatbot (NO multipart)
+      const payload = existingSessionId
+        ? { audio_url: audioUrl, session_id: existingSessionId }
+        : { audio_url: audioUrl };
 
       const chatbotResponse = await axios.post(
         CHATBOT_API_URL,
-        form,
-        { headers: form.getHeaders(), timeout: 20000 }
+        payload,
+        { headers: { "Content-Type": "application/json" }, timeout: 20000 }
       );
 
-      await finalizeReply(userPhone, chatbotResponse.data, existingSessionId);
+      const data = chatbotResponse.data || {};
 
-      fs.unlink(audioPath, () => {});
+      const reply =
+        data.answer ||
+        data.message ||
+        data.reply ||
+        data.text ||
+        "Sorry, I couldn't understand that.";
+
+      if (!existingSessionId && data.session_id) {
+        sessionStore.set(userPhone, data.session_id);
+      }
+
+      await sendWhatsAppMessage(userPhone, reply);
+      return;
     }
 
-    // ================== UNSUPPORTED ==================
-    else {
-      await sendWhatsAppMessage(
-        userPhone,
-        "Please send text or voice messages 🙂"
-      );
-    }
+    // ================== OTHER TYPES ==================
+    res.sendStatus(200);
+    await sendWhatsAppMessage(
+      userPhone,
+      "Please send a text or voice message 🙂"
+    );
 
   } catch (err) {
     console.error("❌ ERROR:", err.response?.data || err.message);
+    try {
+      res.sendStatus(200);
+    } catch {}
   }
 });
-
-// ================== FINALIZE REPLY ==================
-async function finalizeReply(userPhone, data, existingSessionId) {
-  const reply =
-    data?.answer ||
-    data?.message ||
-    data?.reply ||
-    data?.text ||
-    "Sorry, I couldn't understand that.";
-
-  if (!existingSessionId && data?.session_id) {
-    sessionStore.set(userPhone, data.session_id);
-  }
-
-  await sendWhatsAppMessage(userPhone, reply);
-}
 
 // ================== SEND WHATSAPP MESSAGE ==================
 async function sendWhatsAppMessage(destination, text) {
@@ -452,9 +464,13 @@ async function sendWhatsAppMessage(destination, text) {
       }
     }
   );
+
+  console.log("📤 Sent to:", destination);
 }
 
 // ================== START SERVER ==================
-app.listen(4000, () => {
-  console.log("🚀 Gupshup WhatsApp Bot running on port 4000----->>>>>");
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log(`🚀 Gupshup WhatsApp Bot running on port ${PORT}`);
+  console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
 });
