@@ -298,14 +298,15 @@
 
 
 
+
 import express from "express";
 import axios from "axios";
 import "dotenv/config";
-import fs from "fs";
+import OpenAI from "openai";
 
 const app = express();
 
-// 🔑 IMPORTANT: safe parser for hosted servers
+// 🔒 Safe body parser (does NOT affect text)
 app.use(express.json({ limit: "25mb" }));
 
 // ================== CONFIG ==================
@@ -313,14 +314,17 @@ const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
 const CHATBOT_API_URL = process.env.CHATBOT_API_URL;
 const SOURCE = "918093076364";
 
+// ================== OPENAI ==================
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 // ================== SESSION STORE ==================
 const sessionStore = new Map(); // phone -> session_id
 
 // ================== WEBHOOK ==================
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("🔥 WEBHOOK HIT");
-
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     if (!value) return res.sendStatus(200);
 
@@ -339,78 +343,69 @@ app.post("/webhook", async (req, res) => {
     const userPhone = msg.from;
     let userMessage = "";
 
-    // ================== TEXT ==================
+    // ================== TEXT (UNCHANGED, SAFE) ==================
     if (msg.type === "text") {
       userMessage = msg.text?.body?.trim();
       if (!userMessage) return res.sendStatus(200);
 
       console.log("💬 Text:", userMessage);
 
-      // ✅ ACK EARLY (same as your working version)
+      // ✅ ACK EARLY (same as your working code)
       res.sendStatus(200);
     }
 
-    // ================== AUDIO ==================
+    // ================== AUDIO → WHISPER (SAFE MODE) ==================
     else if (msg.type === "audio") {
       console.log("🎤 Voice message received");
-
-      const mediaId = msg.audio?.id;
-      if (!mediaId) {
-        await sendWhatsAppMessage(userPhone, "Could not read voice message.");
-        return res.sendStatus(200);
-      }
 
       // ✅ ACK EARLY (same rule)
       res.sendStatus(200);
 
-      // 1️⃣ Get media URL
-      const mediaMeta = await axios.get(
-        `https://api.gupshup.io/sm/api/v1/media/${mediaId}`,
-        { headers: { apikey: GUPSHUP_API_KEY } }
-      );
+      const audioUrl = msg.audio?.url;
 
-      const mediaUrl = mediaMeta.data.url;
-      const audioPath = `./audio_${mediaId}.ogg`;
+      // ❗ If Gupshup does NOT provide URL, we CANNOT do STT
+      if (!audioUrl) {
+        console.log("⚠️ Audio URL not provided by Gupshup");
+        await sendWhatsAppMessage(
+          userPhone,
+          "Sorry, I couldn't process your voice message. Please try typing 🙂"
+        );
+        return;
+      }
 
-      // 2️⃣ Download audio file
-      const audioStream = await axios.get(mediaUrl, { responseType: "stream" });
-      const writer = fs.createWriteStream(audioPath);
-      audioStream.data.pipe(writer);
-      await new Promise(resolve => writer.on("finish", resolve));
-
-      // 3️⃣ Convert audio → text (PLUGIN)
-      userMessage = await speechToText(audioPath);
-
-      console.log("📝 Transcribed voice:", userMessage);
-
-      // 4️⃣ Cleanup temp file
-      fs.unlink(audioPath, () => {});
+      try {
+        userMessage = await whisperFromUrl(audioUrl);
+        console.log("📝 Whisper text:", userMessage);
+      } catch (e) {
+        console.error("❌ Whisper failed:", e.message);
+        await sendWhatsAppMessage(
+          userPhone,
+          "Sorry, I couldn't understand the voice message. Please type your query 🙂"
+        );
+        return;
+      }
     }
 
     // ================== UNSUPPORTED ==================
     else {
       await sendWhatsAppMessage(
         userPhone,
-        "Please send text or voice messages 🙂"
+        "Please send a text or voice message 🙂"
       );
       return res.sendStatus(200);
     }
 
-    // ---------- SESSION LOGIC ----------
+    // ================== SEND TEXT TO CHATBOT ==================
     const existingSessionId = sessionStore.get(userPhone);
 
     const payload = existingSessionId
       ? { message: userMessage, session_id: existingSessionId }
       : { message: userMessage };
 
-    // ---------- CALL CHATBOT ----------
     const chatbotResponse = await axios.post(
       CHATBOT_API_URL,
       payload,
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 20000
-      }
+      { headers: { "Content-Type": "application/json" }, timeout: 20000 }
     );
 
     const data = chatbotResponse.data || {};
@@ -426,38 +421,27 @@ app.post("/webhook", async (req, res) => {
       sessionStore.set(userPhone, data.session_id);
     }
 
-    // ---------- SEND REPLY ----------
     await sendWhatsAppMessage(userPhone, reply);
 
   } catch (err) {
-    console.error("❌ ERROR:", err);
-    try {
-      res.sendStatus(200);
-    } catch {}
+    console.error("❌ ERROR:", err.message);
+    try { res.sendStatus(200); } catch {}
   }
 });
 
-// ================== SPEECH TO TEXT (OPENAI WHISPER) ==================
-async function speechToText(audioPath) {
-  try {
-    console.log("🔊 Transcribing audio with Whisper:", audioPath);
+// ================== WHISPER FROM URL ==================
+async function whisperFromUrl(audioUrl) {
+  // 1️⃣ Download audio as stream
+  const audioResp = await axios.get(audioUrl, { responseType: "arraybuffer" });
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioPath),
-      model: "whisper-1",
-      response_format: "text" // plain text output
-    });
+  // 2️⃣ Send to Whisper
+  const transcription = await openai.audio.transcriptions.create({
+    file: Buffer.from(audioResp.data),
+    model: "whisper-1"
+  });
 
-    console.log("📝 Whisper transcription:", transcription);
-
-    return transcription.trim();
-
-  } catch (error) {
-    console.error("❌ Whisper STT failed:", error.message);
-    return "";
-  }
+  return transcription.text.trim();
 }
-
 
 // ================== SEND WHATSAPP MESSAGE ==================
 async function sendWhatsAppMessage(destination, text) {
@@ -486,6 +470,6 @@ async function sendWhatsAppMessage(destination, text) {
 // ================== START SERVER ==================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 WhatsApp Bot running on port ------------- ${PORT}`);
+  console.log(`🚀 Gupshup WhatsApp Bot running on port ${PORT}`);
   console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
 });
