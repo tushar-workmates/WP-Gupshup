@@ -149,167 +149,12 @@
 
 
 
-import express from "express";
-import axios from "axios";
-import "dotenv/config";
-
-const app = express();
-app.use(express.json());
-
-// ================== CONFIG ==================
-const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
-const CHATBOT_API_URL = process.env.CHATBOT_API_URL;
-const SOURCE = "918093076364";
-
-// ================== SESSION STORE ==================
-const sessionStore = new Map(); // phone -> session_id
-
-// ================== WEBHOOK ==================
-app.post("/webhook", async (req, res) => {
-  try {
-    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
-
-    if (!value) return res.sendStatus(200);
-
-    // ---------- STATUS UPDATES ----------
-    if (value.statuses) {
-      console.log("ℹ Status update");
-      return res.sendStatus(200);
-    }
-
-    // ---------- MESSAGE CHECK ----------
-    if (!value.messages || !Array.isArray(value.messages)) {
-      return res.sendStatus(200);
-    }
-
-    const msg = value.messages[0];
-    const userPhone = msg.from;
-
-    // ---------- TEXT ONLY ----------
-    if (msg.type !== "text") {
-      await sendWhatsAppMessage(
-        userPhone,
-        "Please send a text message so I can help 🙂"
-      );
-      return res.sendStatus(200);
-    }
-
-    const userMessage = msg.text?.body?.trim();
-    if (!userMessage) return res.sendStatus(200);
-
-    console.log("💬 User:", userPhone);
-    console.log("📝 Message:", userMessage);
-
-    // ACK EARLY
-    res.sendStatus(200);
-
-    // ---------- SESSION LOGIC ----------
-    const existingSessionId = sessionStore.get(userPhone);
-
-    const payload = existingSessionId
-      ? { message: userMessage, session_id: existingSessionId }
-      : { message: userMessage };
-
-    console.log(
-      existingSessionId
-        ? `🔁 Using session ${existingSessionId}`
-        : "🆕 Creating new session"
-    );
-
-    // ---------- CALL CHATBOT ----------
-    const chatbotResponse = await axios.post(
-      CHATBOT_API_URL,
-      payload,
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 20000
-      }
-    );
-
-    console.log(
-      "🧠 Chatbot raw response:",
-      JSON.stringify(chatbotResponse.data, null, 2)
-    );
-
-    const data = chatbotResponse.data || {};
-
-    // ---------- ✅ CORRECT REPLY EXTRACTION ----------
-    let reply =
-      data.answer ||        // ✅ YOUR CHATBOT USES THIS
-      data.message ||
-      data.reply ||
-      data.text ||
-      "Sorry, I couldn't understand that.";
-
-    // ---------- STORE SESSION ID ----------
-    if (!existingSessionId && data.session_id) {
-      sessionStore.set(userPhone, data.session_id);
-      console.log("✅ Session stored:", data.session_id);
-    }
-
-    console.log("🤖 Final reply sent to WhatsApp:", reply);
-
-    // ---------- SEND TO WHATSAPP ----------
-    await sendWhatsAppMessage(userPhone, reply);
-
-  } catch (err) {
-    console.error("❌ ERROR:", err.response?.data || err.message);
-  }
-});
-
-// ================== SEND WHATSAPP MESSAGE ==================
-async function sendWhatsAppMessage(destination, text) {
-  const payload = new URLSearchParams({
-    channel: "whatsapp",
-    source: SOURCE,
-    destination,
-    "message.type": "text",
-    "message.text": text
-  });
-
-  await axios.post(
-    "https://api.gupshup.io/sm/api/v1/msg",
-    payload,
-    {
-      headers: {
-        apikey: GUPSHUP_API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded"
-      }
-    }
-  );
-
-  console.log("📤 Sent to:", destination);
-}
-
-// ================== START SERVER ==================
-app.listen(5000, () => {
-  console.log("🚀 Gupshup WhatsApp Bot running on port 5000");
-  console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
 // import express from "express";
 // import axios from "axios";
 // import "dotenv/config";
-// import fs from "fs";
-
-// console.log("🔥 Server starting...");
 
 // const app = express();
-
-// // 🔑 IMPORTANT: safe body parser for hosted servers
-// app.use(express.json({ limit: "25mb" }));
+// app.use(express.json());
 
 // // ================== CONFIG ==================
 // const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
@@ -321,10 +166,9 @@ app.listen(5000, () => {
 
 // // ================== WEBHOOK ==================
 // app.post("/webhook", async (req, res) => {
-//   console.log("🔥 WEBHOOK HIT");
-
 //   try {
 //     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+
 //     if (!value) return res.sendStatus(200);
 
 //     // ---------- STATUS UPDATES ----------
@@ -341,106 +185,75 @@ app.listen(5000, () => {
 //     const msg = value.messages[0];
 //     const userPhone = msg.from;
 
-//     // ================== TEXT (UNCHANGED FLOW) ==================
-//     if (msg.type === "text") {
-//       const userMessage = msg.text?.body?.trim();
-//       if (!userMessage) return res.sendStatus(200);
-
-//       console.log("💬 Text:", userMessage);
-
-//       // ✅ ACK EARLY (same as your working code)
-//       res.sendStatus(200);
-
-//       const existingSessionId = sessionStore.get(userPhone);
-
-//       const payload = existingSessionId
-//         ? { message: userMessage, session_id: existingSessionId }
-//         : { message: userMessage };
-
-//       const chatbotResponse = await axios.post(
-//         CHATBOT_API_URL,
-//         payload,
-//         { headers: { "Content-Type": "application/json" }, timeout: 20000 }
+//     // ---------- TEXT ONLY ----------
+//     if (msg.type !== "text") {
+//       await sendWhatsAppMessage(
+//         userPhone,
+//         "Please send a text message so I can help 🙂"
 //       );
-
-//       const data = chatbotResponse.data || {};
-
-//       const reply =
-//         data.answer ||
-//         data.message ||
-//         data.reply ||
-//         data.text ||
-//         "Sorry, I couldn't understand that.";
-
-//       if (!existingSessionId && data.session_id) {
-//         sessionStore.set(userPhone, data.session_id);
-//       }
-
-//       await sendWhatsAppMessage(userPhone, reply);
-//       return;
+//       return res.sendStatus(200);
 //     }
 
-//     // ================== AUDIO (SAFE METHOD) ==================
-//     if (msg.type === "audio") {
-//       console.log("🎤 Audio message received");
+//     const userMessage = msg.text?.body?.trim();
+//     if (!userMessage) return res.sendStatus(200);
 
-//       // ✅ ACK EARLY (same rule)
-//       res.sendStatus(200);
+//     console.log("💬 User:", userPhone);
+//     console.log("📝 Message:", userMessage);
 
-//       const mediaId = msg.audio?.id;
-//       if (!mediaId) return;
-
-//       // 1️⃣ Get media URL from Gupshup
-//       const mediaMeta = await axios.get(
-//         `https://api.gupshup.io/sm/api/v1/media/${mediaId}`,
-//         { headers: { apikey: GUPSHUP_API_KEY } }
-//       );
-
-//       const audioUrl = mediaMeta.data.url;
-//       console.log("🔗 Audio URL:", audioUrl);
-
-//       const existingSessionId = sessionStore.get(userPhone);
-
-//       // 2️⃣ Send audio URL to chatbot (NO multipart)
-//       const payload = existingSessionId
-//         ? { audio_url: audioUrl, session_id: existingSessionId }
-//         : { audio_url: audioUrl };
-
-//       const chatbotResponse = await axios.post(
-//         CHATBOT_API_URL,
-//         payload,
-//         { headers: { "Content-Type": "application/json" }, timeout: 20000 }
-//       );
-
-//       const data = chatbotResponse.data || {};
-
-//       const reply =
-//         data.answer ||
-//         data.message ||
-//         data.reply ||
-//         data.text ||
-//         "Sorry, I couldn't understand that.";
-
-//       if (!existingSessionId && data.session_id) {
-//         sessionStore.set(userPhone, data.session_id);
-//       }
-
-//       await sendWhatsAppMessage(userPhone, reply);
-//       return;
-//     }
-
-//     // ================== OTHER TYPES ==================
+//     // ACK EARLY
 //     res.sendStatus(200);
-//     await sendWhatsAppMessage(
-//       userPhone,
-//       "Please send a text or voice message 🙂"
+
+//     // ---------- SESSION LOGIC ----------
+//     const existingSessionId = sessionStore.get(userPhone);
+
+//     const payload = existingSessionId
+//       ? { message: userMessage, session_id: existingSessionId }
+//       : { message: userMessage };
+
+//     console.log(
+//       existingSessionId
+//         ? `🔁 Using session ${existingSessionId}`
+//         : "🆕 Creating new session"
 //     );
+
+//     // ---------- CALL CHATBOT ----------
+//     const chatbotResponse = await axios.post(
+//       CHATBOT_API_URL,
+//       payload,
+//       {
+//         headers: { "Content-Type": "application/json" },
+//         timeout: 20000
+//       }
+//     );
+
+//     console.log(
+//       "🧠 Chatbot raw response:",
+//       JSON.stringify(chatbotResponse.data, null, 2)
+//     );
+
+//     const data = chatbotResponse.data || {};
+
+//     // ---------- ✅ CORRECT REPLY EXTRACTION ----------
+//     let reply =
+//       data.answer ||        // ✅ YOUR CHATBOT USES THIS
+//       data.message ||
+//       data.reply ||
+//       data.text ||
+//       "Sorry, I couldn't understand that.";
+
+//     // ---------- STORE SESSION ID ----------
+//     if (!existingSessionId && data.session_id) {
+//       sessionStore.set(userPhone, data.session_id);
+//       console.log("✅ Session stored:", data.session_id);
+//     }
+
+//     console.log("🤖 Final reply sent to WhatsApp:", reply);
+
+//     // ---------- SEND TO WHATSAPP ----------
+//     await sendWhatsAppMessage(userPhone, reply);
 
 //   } catch (err) {
 //     console.error("❌ ERROR:", err.response?.data || err.message);
-//     try {
-//       res.sendStatus(200);
-//     } catch {}
 //   }
 // });
 
@@ -469,8 +282,210 @@ app.listen(5000, () => {
 // }
 
 // // ================== START SERVER ==================
-// const PORT = process.env.PORT || 4000;
-// app.listen(PORT, () => {
-//   console.log(`🚀 Gupshup WhatsApp Bot running on port ${PORT}`);
+// app.listen(5000, () => {
+//   console.log("🚀 Gupshup WhatsApp Bot running on port 5000");
 //   console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
 // });
+
+
+
+
+
+
+
+
+
+
+
+
+import express from "express";
+import axios from "axios";
+import "dotenv/config";
+import fs from "fs";
+
+const app = express();
+
+// 🔑 IMPORTANT: safe parser for hosted servers
+app.use(express.json({ limit: "25mb" }));
+
+// ================== CONFIG ==================
+const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
+const CHATBOT_API_URL = process.env.CHATBOT_API_URL;
+const SOURCE = "918093076364";
+
+// ================== SESSION STORE ==================
+const sessionStore = new Map(); // phone -> session_id
+
+// ================== WEBHOOK ==================
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("🔥 WEBHOOK HIT");
+
+    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    if (!value) return res.sendStatus(200);
+
+    // ---------- STATUS UPDATES ----------
+    if (value.statuses) {
+      console.log("ℹ Status update");
+      return res.sendStatus(200);
+    }
+
+    // ---------- MESSAGE CHECK ----------
+    if (!value.messages || !Array.isArray(value.messages)) {
+      return res.sendStatus(200);
+    }
+
+    const msg = value.messages[0];
+    const userPhone = msg.from;
+    let userMessage = "";
+
+    // ================== TEXT ==================
+    if (msg.type === "text") {
+      userMessage = msg.text?.body?.trim();
+      if (!userMessage) return res.sendStatus(200);
+
+      console.log("💬 Text:", userMessage);
+
+      // ✅ ACK EARLY (same as your working version)
+      res.sendStatus(200);
+    }
+
+    // ================== AUDIO ==================
+    else if (msg.type === "audio") {
+      console.log("🎤 Voice message received");
+
+      const mediaId = msg.audio?.id;
+      if (!mediaId) {
+        await sendWhatsAppMessage(userPhone, "Could not read voice message.");
+        return res.sendStatus(200);
+      }
+
+      // ✅ ACK EARLY (same rule)
+      res.sendStatus(200);
+
+      // 1️⃣ Get media URL
+      const mediaMeta = await axios.get(
+        `https://api.gupshup.io/sm/api/v1/media/${mediaId}`,
+        { headers: { apikey: GUPSHUP_API_KEY } }
+      );
+
+      const mediaUrl = mediaMeta.data.url;
+      const audioPath = `./audio_${mediaId}.ogg`;
+
+      // 2️⃣ Download audio file
+      const audioStream = await axios.get(mediaUrl, { responseType: "stream" });
+      const writer = fs.createWriteStream(audioPath);
+      audioStream.data.pipe(writer);
+      await new Promise(resolve => writer.on("finish", resolve));
+
+      // 3️⃣ Convert audio → text (PLUGIN)
+      userMessage = await speechToText(audioPath);
+
+      console.log("📝 Transcribed voice:", userMessage);
+
+      // 4️⃣ Cleanup temp file
+      fs.unlink(audioPath, () => {});
+    }
+
+    // ================== UNSUPPORTED ==================
+    else {
+      await sendWhatsAppMessage(
+        userPhone,
+        "Please send text or voice messages 🙂"
+      );
+      return res.sendStatus(200);
+    }
+
+    // ---------- SESSION LOGIC ----------
+    const existingSessionId = sessionStore.get(userPhone);
+
+    const payload = existingSessionId
+      ? { message: userMessage, session_id: existingSessionId }
+      : { message: userMessage };
+
+    // ---------- CALL CHATBOT ----------
+    const chatbotResponse = await axios.post(
+      CHATBOT_API_URL,
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+        timeout: 20000
+      }
+    );
+
+    const data = chatbotResponse.data || {};
+
+    const reply =
+      data.answer ||
+      data.message ||
+      data.reply ||
+      data.text ||
+      "Sorry, I couldn't understand that.";
+
+    if (!existingSessionId && data.session_id) {
+      sessionStore.set(userPhone, data.session_id);
+    }
+
+    // ---------- SEND REPLY ----------
+    await sendWhatsAppMessage(userPhone, reply);
+
+  } catch (err) {
+    console.error("❌ ERROR:", err);
+    try {
+      res.sendStatus(200);
+    } catch {}
+  }
+});
+
+// ================== SPEECH TO TEXT (OPENAI WHISPER) ==================
+async function speechToText(audioPath) {
+  try {
+    console.log("🔊 Transcribing audio with Whisper:", audioPath);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(audioPath),
+      model: "whisper-1",
+      response_format: "text" // plain text output
+    });
+
+    console.log("📝 Whisper transcription:", transcription);
+
+    return transcription.trim();
+
+  } catch (error) {
+    console.error("❌ Whisper STT failed:", error.message);
+    return "";
+  }
+}
+
+
+// ================== SEND WHATSAPP MESSAGE ==================
+async function sendWhatsAppMessage(destination, text) {
+  const payload = new URLSearchParams({
+    channel: "whatsapp",
+    source: SOURCE,
+    destination,
+    "message.type": "text",
+    "message.text": text
+  });
+
+  await axios.post(
+    "https://api.gupshup.io/sm/api/v1/msg",
+    payload,
+    {
+      headers: {
+        apikey: GUPSHUP_API_KEY,
+        "Content-Type": "application/x-www-form-urlencoded"
+      }
+    }
+  );
+
+  console.log("📤 Sent to:", destination);
+}
+
+// ================== START SERVER ==================
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 WhatsApp Bot running on port ------------- ${PORT}`);
+  console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
+});
