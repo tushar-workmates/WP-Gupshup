@@ -196,6 +196,10 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import FormData from "form-data";
+import { exec } from "child_process";
+import util from "util";
+const execAsync = util.promisify(exec);
+
 
 
 const app = express();
@@ -330,61 +334,70 @@ async function sarvamSTT(audioPath) {
   const url = "https://api.sarvam.ai/speech-to-text";
 
   const form = new FormData();
-  form.append("file", fs.createReadStream(audioPath));
+  form.append("file", fs.createReadStream(audioPath), {
+    filename: path.basename(audioPath),
+    contentType: "audio/wav"
+  });
   form.append("model", "saarika:v1");
-  // Optional: language_code can be omitted for auto-detect
 
-  try {
-    const resp = await axios.post(url, form, {
-      headers: {
-        ...form.getHeaders(),
-        "API-Subscription-Key": SARVAM_API_KEY
-      },
-      timeout: 30000
-    });
+  const response = await axios.post(url, form, {
+    headers: {
+      ...form.getHeaders(),
+      "api-subscription-key": process.env.SARVAM_API_KEY
+    },
+    timeout: 30000
+  });
 
-    if (!resp.data?.transcript) {
-      throw new Error("Empty Sarvam transcript");
-    }
-
-    return resp.data.transcript.trim();
-  } catch (err) {
-    console.error("❌ Sarvam STT failed:", err.message);
-    throw err;
+  if (!response.data?.transcript) {
+    throw new Error("Sarvam returned empty transcript");
   }
+
+  return response.data.transcript.trim();
 }
+
 
 
 
 async function whisperFromUrl(audioUrl) {
-  const tmpPath = path.join("/tmp", `voice_${Date.now()}.ogg`);
+  const oggPath = path.join("/tmp", `voice_${Date.now()}.ogg`);
+  const wavPath = oggPath.replace(".ogg", ".wav");
 
-  // 1️⃣ Download audio
+  // 1️⃣ Download OGG audio
   const audioResp = await axios.get(audioUrl, { responseType: "stream" });
-  const writer = fs.createWriteStream(tmpPath);
+  const writer = fs.createWriteStream(oggPath);
   audioResp.data.pipe(writer);
   await new Promise(resolve => writer.on("finish", resolve));
 
   try {
-    // 2️⃣ FIRST TRY: Sarvam (Indian languages)
-    const sarvamText = await sarvamSTT(tmpPath);
+    // 2️⃣ Convert OGG → WAV (Sarvam requirement)
+    await execAsync(
+      `ffmpeg -y -i "${oggPath}" -ar 16000 -ac 1 "${wavPath}"`
+    );
+
+    // 3️⃣ PRIMARY: Sarvam STT (WAV only)
+    const sarvamText = await sarvamSTT(wavPath);
     console.log("🟢 Sarvam transcript:", sarvamText);
     return sarvamText;
-  } catch {
-    // 3️⃣ FALLBACK: Whisper
-    console.log("⚠️ Falling back to Whisper");
 
+  } catch (err) {
+    console.log("⚠️ Sarvam failed, falling back to Whisper");
+
+    // 4️⃣ FALLBACK: Whisper (OGG is fine)
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tmpPath),
+      file: fs.createReadStream(oggPath),
       model: "whisper-1"
     });
 
     return transcription.text.trim();
+
   } finally {
-    // 4️⃣ Cleanup
-    fs.unlink(tmpPath, () => {});
+    // 5️⃣ Cleanup
+    fs.unlink(oggPath, () => {});
+    fs.unlink(wavPath, () => {});
   }
 }
+
+
 
 
 // ================== SEND WHATSAPP MESSAGE ==================
@@ -414,7 +427,7 @@ async function sendWhatsAppMessage(destination, text) {
 // ================== START SERVER ==================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Gupshup WhatsApp Bot running on port>>>>>> ${PORT}`);
+  console.log(`🚀 Gupshup WhatsApp Bot running on port-------- ${PORT}`);
   console.log("🤖 Chatbot URL:", CHATBOT_API_URL);
 });
 
