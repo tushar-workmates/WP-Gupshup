@@ -324,7 +324,7 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("❌ ERROR:", err.message);
-    try { res.sendStatus(200); } catch {}
+    try { res.sendStatus(200); } catch { }
   }
 });
 
@@ -371,8 +371,13 @@ async function whisperFromUrl(audioUrl) {
   try {
     // 2️⃣ Convert OGG → WAV (Sarvam requirement)
     await execAsync(
-      `ffmpeg -y -i "${oggPath}" -ar 16000 -ac 1 "${wavPath}"`
+      `ffmpeg -y -i "${oggPath}" -acodec pcm_s16le -ar 16000 -ac 1 "${wavPath}"`
     );
+
+    const stats = fs.statSync(wavPath);
+    console.log("🎧 WAV size:", stats.size, "bytes");
+
+
 
     // 3️⃣ PRIMARY: Sarvam STT (WAV only)
     const sarvamText = await sarvamSTT(wavPath);
@@ -392,8 +397,8 @@ async function whisperFromUrl(audioUrl) {
 
   } finally {
     // 5️⃣ Cleanup
-    fs.unlink(oggPath, () => {});
-    fs.unlink(wavPath, () => {});
+    fs.unlink(oggPath, () => { });
+    fs.unlink(wavPath, () => { });
   }
 }
 
