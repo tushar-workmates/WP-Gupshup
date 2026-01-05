@@ -206,7 +206,7 @@ app.use(express.json({ limit: "25mb" }));
 // ================== CONFIG ==================
 const GUPSHUP_API_KEY = process.env.GUPSHUP_API_KEY;
 const CHATBOT_API_URL = process.env.CHATBOT_API_URL;
-const SARVAM_API_KEY = process.env.SARVAM_API_KEY;
+const SARVAM_API_KEY = process.env.SARVAM_API_KEYY;
 const SOURCE = "918093076364";
 
 // ================== OPENAI ==================
@@ -338,7 +338,7 @@ async function sarvamSTT(audioPath) {
     const resp = await axios.post(url, form, {
       headers: {
         ...form.getHeaders(),
-        "API-Subscription-Key": process.env.SARVAM_API_KEY
+        "API-Subscription-Key": SARVAM_API_KEY
       },
       timeout: 30000
     });
